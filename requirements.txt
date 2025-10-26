@@ -1,0 +1,18 @@
+# Kite Connect API
+kiteconnect==4.2.0
+
+# Data processing
+pandas==2.0.3
+numpy==1.24.3
+pytz==2023.3
+
+# Web server for OAuth
+flask==3.0.0
+requests==2.31.0
+
+# Telegram bot
+python-telegram-bot==20.5
+
+# Testing (optional)
+pytest==7.4.0
+pytest-cov==4.1.0

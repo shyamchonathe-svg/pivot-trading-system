@@ -1,0 +1,67 @@
+{
+  "api_key": "your_kite_api_key_here",
+  "api_secret": "your_kite_api_secret_here",
+  "telegram_token": "your_telegram_bot_token_here",
+  "telegram_chat_id": "your_telegram_chat_id_here",
+  
+  "auth": {
+    "callback_host": "0.0.0.0",
+    "callback_port": 8000,
+    "redirect_url": "https://your-domain.ddns.net:8000/callback",
+    "postback_port": 8001,
+    "postback_url": "https://your-domain.ddns.net:8001/postback",
+    "auth_timeout_seconds": 300,
+    "use_ssl": true,
+    "ssl_cert_path": "/path/to/cert.pem",
+    "ssl_key_path": "/path/to/key.pem"
+  },
+  
+  "trading": {
+    "instrument": "SENSEX",
+    "strike_interval": 100,
+    "strike_range": 500,
+    "candle_size_percentile": 75,
+    "max_candles_timeout": 10,
+    "max_re_entries": 1,
+    "lot_size": 10,
+    "paper_trading": true
+  },
+  
+  "risk_management": {
+    "max_daily_loss": 25000,
+    "max_trades_per_day": 3
+  },
+  
+  "market": {
+    "start_time": "09:15",
+    "end_time": "15:30",
+    "eod_exit_time": "15:15",
+    "holidays": [
+      "2025-01-26",
+      "2025-02-12",
+      "2025-03-14",
+      "2025-04-10",
+      "2025-04-14",
+      "2025-05-01",
+      "2025-08-15",
+      "2025-10-02",
+      "2025-10-29",
+      "2025-11-14"
+    ]
+  },
+  
+  "data": {
+    "database_path": "data/trading.db",
+    "cache_dir": "data/cache",
+    "access_token_file": "data/access_token.txt",
+    "log_retention_days": 7
+  },
+  
+  "notifications": {
+    "send_entry_signals": true,
+    "send_exit_signals": true,
+    "send_daily_summary": true,
+    "send_errors": true,
+    "send_auth_requests": true
+  }
+}
