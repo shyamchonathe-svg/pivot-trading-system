@@ -73,6 +73,10 @@ class PivotTradingSystem:
         
         logger.info("System components initialized")
     
+        
+        # Load trading control state
+        self.control_file = 'data/trading_control.json'
+        self.load_control_state()
     def load_config(self, config_path):
         """Load configuration from JSON file"""
         try:
@@ -81,6 +85,26 @@ class PivotTradingSystem:
             logger.info(f"Configuration loaded from {config_path}")
             return config
         except Exception as e:
+    
+    def load_control_state(self):
+        """Load trading control state from file"""
+        try:
+            with open(self.control_file, 'r') as f:
+                self.control = json.load(f)
+        except:
+            self.control = {
+                'trading_enabled': True,
+                'panic_mode': False,
+                'last_updated': None
+            }
+            # Create file
+            import os
+            os.makedirs('data', exist_ok=True)
+            with open(self.control_file, 'w') as f:
+                json.dump(self.control, f, indent=2)
+        
+        logger.info(f"Control state: trading_enabled={self.control['trading_enabled']}, panic_mode={self.control['panic_mode']}")
+    
             logger.error(f"Failed to load config: {e}")
             sys.exit(1)
     
@@ -437,62 +461,143 @@ Monitoring for entry signals...
                 self.notifier.send_daily_summary(summary)
                 logger.info(f"Daily Summary: {summary['total_trades']} trades, P&L: ₹{summary['gross_pnl']:+.2f}")
             else:
-                logger.info("No trades today")
-                self.notifier.send_message("📊 No trades executed today.")
-            
-            # Cleanup cache
-            self.data_manager.cleanup_cache()
-            
-            # Reset position manager
-            self.position_mgr.reset_daily_state()
-            
-            logger.info("=" * 80)
-            logger.info("CLEANUP COMPLETE")
-            logger.info("=" * 80)
-            
-        except Exception as e:
-            logger.error(f"Error in EOD cleanup: {e}", exc_info=True)
-            self.notifier.send_error_alert("EOD Cleanup Error", str(e))
-    
-    def shutdown(self, signum=None, frame=None):
-        """Graceful shutdown"""
-        logger.info("Shutting down gracefully...")
-        self.running = False
-        
-        self.notifier.send_system_shutdown("System shutdown requested")
-    
     def run(self):
-        """Main run method"""
+        """Main run method with proper scheduling"""
         try:
             # Setup signal handlers
             signal.signal(signal.SIGINT, self.shutdown)
             signal.signal(signal.SIGTERM, self.shutdown)
             
-            # Send startup notification
-            self.notifier.send_system_startup()
+            # Send startup notification ONLY ONCE
+            startup_msg = """🚀 TRADING SYSTEM STARTED
+📅 Time: {}
+
+✅ System Initialized
+🟢 Monitoring started
+
+Next: Pre-market at 8:45 AM
+Trading: 9:15 AM - 3:15 PM
+""".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S IST'))
             
-            # Check if trading day
-            if not self.trading_hours.is_trading_day():
-                logger.info("Not a trading day (weekend/holiday)")
-                self.notifier.send_message("📅 Not a trading day. System will start on next trading day.")
-                return
+            self.notifier.send_message(startup_msg)
+            logger.info("Trading system started")
             
-            # Authenticate
-            if not self.authenticate():
-                logger.error("Authentication failed. Exiting.")
-                return
+            # Main scheduling loop
+            pre_market_done = False
+            trading_done = False
             
-            # Wait for pre-market time (8:45 AM)
-            pre_market_time = datetime.now().replace(hour=8, minute=45, second=0, microsecond=0)
-            now = datetime.now()
+            while True:
+            # Reload control state each cycle
+            self.load_control_state()
             
-            if now < pre_market_time:
-                wait_seconds = (pre_market_time - now).total_seconds()
-                logger.info(f"Waiting {wait_seconds/60:.1f} minutes until pre-market (8:45 AM)...")
-                time.sleep(wait_seconds)
+            # Check panic mode
+            if self.control["panic_mode"]:
+                logger.warning("🚨 PANIC MODE - Force closing all positions")
+                for strike in self.pivot_data.keys():
+                    for option_type in ["CE", "PE"]:
+                        position = self.position_manager.get_position(strike, option_type)
+                        if position and position["status"] == "OPEN":
+                            symbol = self.data_manager.get_option_symbol(strike, option_type, self.expiry_date)
+                            ltp = self.data_manager.get_ltp(symbol)
+                            if ltp:
+                                self.position_manager.close_position(strike, option_type, ltp, "PANIC")
+                                self.notifier.send_exit_signal(symbol, position["entry_price"], ltp, ltp - position["entry_price"], "PANIC")
+                logger.info("All positions closed. Exiting trading loop.")
+                break
             
-            # Pre-market setup
-            if not self.pre_market_setup():
+                now = datetime.now()
+                current_time = now.time()
+                
+                # Check if trading day
+                if not self.trading_hours.is_trading_day():
+                    if now.hour == 8 and now.minute == 0:  # Log once at 8 AM
+                        logger.info("Not a trading day (weekend/holiday)")
+                    # Sleep for 1 hour
+                    time.sleep(3600)
+                    continue
+                
+                # Reset flags for new day
+                if now.hour == 0 and now.minute < 5:
+                    pre_market_done = False
+                    trading_done = False
+                    logger.info("New day - resetting flags")
+                    time.sleep(300)  # Sleep 5 min to avoid multiple resets
+                    continue
+                
+                # Pre-market setup (8:45 AM - 9:00 AM)
+                if not pre_market_done and 8 <= now.hour < 9:
+                    if now.hour == 8 and now.minute >= 45:
+                        logger.info("Starting pre-market setup...")
+                        
+                        # Authenticate
+                        if not self.authenticate():
+                            logger.error("Authentication failed. Retrying in 5 minutes...")
+                            time.sleep(300)
+                            continue
+                        
+                        # Pre-market setup
+                        if self.pre_market_setup():
+                            pre_market_done = True
+                            logger.info("Pre-market setup completed")
+                        else:
+                            logger.error("Pre-market setup failed. Retrying in 5 minutes...")
+                            time.sleep(300)
+                            continue
+                    else:
+                        # Before 8:45 AM
+                        logger.info(f"Waiting for pre-market time (8:45 AM). Current: {now.strftime('%H:%M')}")
+                        time.sleep(600)  # Sleep 10 minutes
+                        continue
+                
+                # Trading hours (9:15 AM - 3:15 PM)
+                elif self.trading_hours.is_market_open():
+                    if not pre_market_done:
+                        logger.warning("Market open but pre-market not done. Running now...")
+                        if self.authenticate() and self.pre_market_setup():
+                            pre_market_done = True
+                    
+                    if not trading_done:
+                        logger.info("Starting trading loop...")
+                        self.trading_loop()
+                        trading_done = True
+                        
+                        # After trading loop ends, run EOD cleanup
+                        logger.info("Trading hours ended. Running EOD cleanup...")
+                        self.end_of_day_cleanup()
+                
+                # After market close (after 3:15 PM)
+                elif now.hour >= 15 and now.minute >= 15:
+                    if not trading_done and pre_market_done:
+                        # Market closed early or we missed it
+                        logger.info("Market closed. Running EOD cleanup...")
+                        self.end_of_day_cleanup()
+                        trading_done = True
+                    
+                    # Calculate sleep time until next day 8:00 AM
+                    tomorrow_8am = datetime.combine(
+                        now.date() + timedelta(days=1),
+                        datetime.strptime("08:00", "%H:%M").time()
+                    )
+                    sleep_seconds = (tomorrow_8am - now).total_seconds()
+                    
+                    logger.info(f"📅 Market closed. Sleeping until {tomorrow_8am.strftime('%Y-%m-%d %H:%M')} ({sleep_seconds/3600:.1f} hours)")
+                    logger.info("🌙 System in idle mode. No messages until tomorrow.")
+                    
+                    # Sleep until tomorrow
+                    time.sleep(sleep_seconds)
+                
+                else:
+                    # Before market hours (before 9:15 AM, after 8:45 AM)
+                    logger.info(f"Before market hours. Current: {now.strftime('%H:%M')}. Waiting...")
+                    time.sleep(300)  # Check every 5 minutes
+                
+        except KeyboardInterrupt:
+            logger.info("System stopped by user")
+            self.shutdown()
+        except Exception as e:
+            logger.error(f"Fatal error in run loop: {e}", exc_info=True)
+            self.notifier.send_message(f"❌ Fatal Error: {str(e)}")
+            raise
                 logger.error("Pre-market setup failed. Exiting.")
                 return
             

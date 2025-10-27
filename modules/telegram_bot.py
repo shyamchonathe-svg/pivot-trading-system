@@ -117,6 +117,11 @@ Type /help anytime to see this message.
             stats = cursor.fetchone()
             conn.close()
             
+            # Handle None values safely
+            total_trades = stats[0] or 0
+            total_wins = stats[1] or 0
+            total_pnl = stats[2] if stats[2] is not None else 0.0
+            
             message = f"""
 📊 *System Status*
 
@@ -129,9 +134,9 @@ Trading System: {'✅ Running' if trading_running else '❌ Stopped'}
 
 *Today ({date.today()}):*
 Open Positions: {open_positions}
-Total Trades: {stats[0] or 0}
-Wins: {stats[1] or 0}
-P&L: ₹{stats[2]:.2f if stats[2] else 0.00}
+Total Trades: {total_trades}
+Wins: {total_wins}
+P&L: ₹{total_pnl:.2f}
 
 *Last Updated:* {self.control['last_updated'] or 'Never'}
 """
