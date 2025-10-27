@@ -152,7 +152,7 @@ class AuthManager:
         
         try:
             # Try to reach health endpoint
-            health_url = f"{self.server_url}/health"
+            health_url = "http://localhost:8001/health"
             response = requests.get(health_url, timeout=5, verify=False)
             
             if response.status_code == 200:
@@ -183,7 +183,7 @@ class AuthManager:
             logger.error("No postback server URL configured")
             return None
         
-        token_url = f"{self.server_url}/get_token"
+        token_url = "http://localhost:8001/get_token"
         start_time = time.time()
         
         logger.info(f"Waiting for request token (timeout: {timeout}s)...")

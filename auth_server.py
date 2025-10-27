@@ -128,6 +128,7 @@ class AuthenticationServer:
                     <div class="status info">
                         <h3>📡 Endpoints</h3>
                         <p><span class="endpoint">/callback</span> - OAuth callback</p>
+                        <p><span class="endpoint">/redirect</span> - OAuth redirect (alias)</p>
                         <p><span class="endpoint">/postback</span> - Postback webhook</p>
                         <p><span class="endpoint">/health</span> - Health check</p>
                         <p><span class="endpoint">/status</span> - JSON status</p>
@@ -171,6 +172,7 @@ class AuthenticationServer:
             })
         
         @self.app.route('/callback')
+        @self.app.route('/redirect')
         @self.app.route('/postback')
         def handle_callback():
             """Handle OAuth callback from Kite Connect"""
@@ -395,9 +397,11 @@ class AuthenticationServer:
         logger.info("")
         logger.info("ENDPOINTS:")
         logger.info("  Callback: https://sensexbot.ddns.net/callback")
+        logger.info("  Redirect: https://sensexbot.ddns.net/redirect")
         logger.info("  Postback: https://sensexbot.ddns.net/postback")
         logger.info("  Health: https://sensexbot.ddns.net/health")
         logger.info("  Status: https://sensexbot.ddns.net/status")
+        logger.info("=" * 60)
         logger.info("")
         logger.info("TEST LOCALLY:")
         logger.info("  curl http://localhost:8001/health")

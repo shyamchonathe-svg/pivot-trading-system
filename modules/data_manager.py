@@ -48,11 +48,11 @@ class DataManager:
     def get_option_symbol(self, strike, option_type, expiry_date=None):
         """
         Generate option symbol
-        Format: SENSEX<YYMMDD><STRIKE><CE/PE>
-        Example: SENSEX2510280100CE
+        Format: SENSEX25OCT84300CE
+        Example: SENSEX25OCT84300CE
         
         Args:
-            strike: Strike price (e.g., 80100)
+            strike: Strike price (e.g., 84300)
             option_type: 'CE' or 'PE'
             expiry_date: datetime.date (default: next weekly expiry)
         
@@ -63,13 +63,12 @@ class DataManager:
         if expiry_date is None:
             expiry_date = self.get_next_expiry()
         
-        # Format: YYMMDD
-        date_str = expiry_date.strftime('%y%m%d')
+        # Format: YY (25), MONTH (OCT), STRIKE (84300)
+        year = expiry_date.strftime('%y')  # 25
+        month = expiry_date.strftime('%b').upper()  # OCT
+        strike_str = str(int(strike))  # 84300
         
-        # Format strike (remove decimals, pad if needed)
-        strike_str = f"{int(strike)}"
-        
-        symbol = f"{instrument}{date_str}{strike_str}{option_type}"
+        symbol = f"{instrument}{year}{month}{strike_str}{option_type}"
         
         return symbol
     

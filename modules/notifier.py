@@ -80,9 +80,9 @@ class TelegramNotifier:
 <a href="{login_url}">🔗 Login to Zerodha</a>
 
 <b>⏰ Important:</b>
-• Authentication link valid for 5 minutes
-• System will NOT trade without authentication
-• Complete login and 2FA within timeout
+- Authentication link valid for 5 minutes
+- System will NOT trade without authentication
+- Complete login and 2FA within timeout
 
 <b>🚨 What happens next:</b>
 1. Click link above
@@ -110,9 +110,9 @@ class TelegramNotifier:
 🔑 Token: <code>{token_preview}</code>
 
 <b>🚀 System Status:</b>
-• Authentication: ✅ Complete
-• Token: ✅ Saved
-• Trading System: 🟢 Starting...
+- Authentication: ✅ Complete
+- Token: ✅ Saved
+- Trading System: 🟢 Starting...
 
 <b>📊 Next Steps:</b>
 Pre-market setup starting at 8:45 AM
@@ -120,10 +120,10 @@ Trading will begin at 9:15 AM
 
 <b>💡 System Ready!</b>
 You will receive alerts for:
-• Entry signals
-• Exit signals  
-• Daily P&L summary
-• Any errors or issues
+- Entry signals
+- Exit signals  
+- Daily P&L summary
+- Any errors or issues
         """
         
         return self.send_message(message)
@@ -142,10 +142,10 @@ You will receive alerts for:
 ⚠️ Reason: {error_reason}
 
 <b>🔧 Possible Issues:</b>
-• Authentication timeout (5 minutes)
-• Invalid Zerodha credentials
-• Network connectivity problem
-• 2FA not completed
+- Authentication timeout (5 minutes)
+- Invalid Zerodha credentials
+- Network connectivity problem
+- 2FA not completed
 
 <b>🔄 What to do:</b>
 1. Check your Zerodha credentials
@@ -312,9 +312,9 @@ Intraday: {summary['intraday_entries']}
 {'🎉 Excellent day! Keep the momentum!' if summary['win_rate'] >= 70 else '👍 Good performance!' if summary['win_rate'] >= 50 else '📈 Room for improvement. Analyze and adapt.'}
 
 <b>💡 Notes:</b>
-• Review logs for detailed trade analysis
-• Database updated with all trade details
-• System will start fresh tomorrow
+- Review logs for detailed trade analysis
+- Database updated with all trade details
+- System will start fresh tomorrow
 
 🌙 <b>End of Trading Day</b>
 System shutting down. See you tomorrow! 🚀
@@ -329,6 +329,11 @@ System shutting down. See you tomorrow! 🚀
         
         ist_time = datetime.now(self.ist_tz).strftime("%Y-%m-%d %H:%M:%S IST")
         
+        # Fix for f-string with backslash issue
+        context_text = ""
+        if context:
+            context_text = "<b>📍 Context:</b>\n" + context + "\n\n"
+        
         message = f"""
 🚨 <b>SYSTEM ERROR ALERT</b>
 
@@ -338,12 +343,10 @@ System shutting down. See you tomorrow! 🚀
 <b>📝 Error Details:</b>
 <code>{error_message[:500]}</code>
 
-{f'<b>📍 Context:</b>\n{context}' if context else ''}
-
-<b>🔧 Action Required:</b>
-• Check system logs for details
-• Verify system is still running
-• Manual intervention may be needed
+{context_text}<b>🔧 Action Required:</b>
+- Check system logs for details
+- Verify system is still running
+- Manual intervention may be needed
 
 <b>📋 Debug Commands:</b>
 <code>tail -f logs/system.log</code>
@@ -365,10 +368,10 @@ Please investigate immediately.
 📅 Time: {ist_time}
 
 <b>✅ System Initialized:</b>
-• Core modules loaded
-• Database connected
-• Configuration validated
-• Telegram notifications active
+- Core modules loaded
+- Database connected
+- Configuration validated
+- Telegram notifications active
 
 <b>📋 Next Steps:</b>
 1. Waiting for authentication (if needed)
@@ -376,10 +379,10 @@ Please investigate immediately.
 3. Trading starts at 9:15 AM
 
 <b>🔔 You will be notified of:</b>
-• Authentication requests
-• Entry/exit signals
-• Daily P&L summary
-• Any system errors
+- Authentication requests
+- Entry/exit signals
+- Daily P&L summary
+- Any system errors
 
 🟢 <b>System Ready and Monitoring...</b>
         """
@@ -397,10 +400,10 @@ Please investigate immediately.
 📝 Reason: {reason}
 
 <b>✅ Cleanup Complete:</b>
-• All positions closed
-• Data cached cleared
-• Logs rotated
-• Database updated
+- All positions closed
+- Data cached cleared
+- Logs rotated
+- Database updated
 
 <b>📊 Summary:</b>
 Daily summary has been generated and saved
@@ -414,29 +417,3 @@ Will auto-start tomorrow at configured time
         """
         
         return self.send_message(message)
-
-
-if __name__ == "__main__":
-    # Test notifier
-    logging.basicConfig(level=logging.INFO)
-    
-    test_config = {
-        'telegram_token': '8427480734:AAFjkFwNbM9iUo0wa1Biwg8UHmJCvLs5vho',
-        'telegram_chat_id': '1639045622',
-        'notifications': {
-            'send_entry_signals': True,
-            'send_exit_signals': True,
-            'send_daily_summary': True,
-            'send_errors': True,
-            'send_auth_requests': True
-        }
-    }
-    
-    notifier = TelegramNotifier(test_config)
-    
-    # Test basic message
-    print("Testing basic message...")
-    notifier.send_message("🧪 <b>Test Message</b>\n\nTelegram notifier is working!")
-    
-    print("\n✅ Notifier test complete")
-    print("Check your Telegram for the test message!")
