@@ -492,12 +492,24 @@ To setup custom reminders:
     def is_service_running(self, service_name):
         """Check if systemd service is running"""
         try:
+            # Method 1: Try systemctl
             result = subprocess.run(
                 ['systemctl', 'is-active', service_name],
                 capture_output=True,
                 text=True
             )
-            return result.stdout.strip() == 'active'
+            if result.stdout.strip() == 'active':
+                return True
+            
+            # Method 2: Fallback - check process
+            if 'auth' in service_name:
+                result = subprocess.run(['pgrep', '-f', 'auth_server.py'], capture_output=True)
+            elif 'trading' in service_name:
+                result = subprocess.run(['pgrep', '-f', 'main.py'], capture_output=True)
+            else:
+                return False
+            
+            return result.returncode == 0
         except:
             return False
     
