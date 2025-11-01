@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Pivot Trading System - Main Entry Point
-Automated options trading using pivot point strategy
+Pivot Trading System - Main Entry Point (FIXED V2)
+CRITICAL FIX: Always authenticate fresh at 8 AM, never trust old tokens
 """
 
 import os
@@ -66,10 +66,13 @@ class PivotTradingSystem:
         self.position_mgr = None
         
         # Trading state
-        self.pivot_data = {}  # {strike: {CE: pivots, PE: pivots}}
-        self.market_structure = {}  # {strike: {CE: structure, PE: structure}}
+        self.pivot_data = {}
+        self.market_structure = {}
         self.atm_strike = None
         self.candle_count = 0
+        self.authenticated = False
+        self.auth_attempts = 0
+        self.max_auth_attempts = 20  # Try for ~1 hour (3 min intervals)
         
         # Load trading control state
         self.control_file = 'data/trading_control.json'
@@ -99,52 +102,178 @@ class PivotTradingSystem:
                 'panic_mode': False,
                 'last_updated': None
             }
-            # Create file
             os.makedirs('data', exist_ok=True)
             with open(self.control_file, 'w') as f:
                 json.dump(self.control, f, indent=2)
         
         logger.info(f"Control state: trading_enabled={self.control['trading_enabled']}, panic_mode={self.control['panic_mode']}")
     
-    def authenticate(self):
-        """Authenticate with Kite Connect"""
-        logger.info("Starting authentication process...")
+    def is_token_fresh(self, token_file_path):
+        """
+        Check if token was generated today AND recently (within 2 hours)
         
+        Kite tokens expire, so only trust tokens from:
+        - Today's date
+        - Generated after 6:00 AM (to avoid overnight tokens)
+        - Less than 2 hours old
+        """
+        try:
+            if not os.path.exists(token_file_path):
+                logger.info("No token file exists")
+                return False
+            
+            # Check file modification time
+            file_mtime = os.path.getmtime(token_file_path)
+            file_time = datetime.fromtimestamp(file_mtime)
+            now = datetime.now()
+            
+            # Check if token from today
+            if file_time.date() != now.date():
+                logger.warning(f"Token file is from {file_time.date()}, today is {now.date()}")
+                return False
+            
+            # Check if token generated after 6 AM
+            if file_time.hour < 6:
+                logger.warning(f"Token generated too early: {file_time.strftime('%H:%M:%S')}")
+                return False
+            
+            # Check if token less than 2 hours old
+            age_hours = (now - file_time).total_seconds() / 3600
+            if age_hours > 2:
+                logger.warning(f"Token is {age_hours:.1f} hours old (too old)")
+                return False
+            
+            # Read and check date stamp inside file
+            with open(token_file_path, 'r') as f:
+                content = f.read().strip()
+            
+            if '|' in content:
+                token, date_str = content.split('|', 1)
+                token_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                
+                if token_date != now.date():
+                    logger.warning(f"Token date stamp is {token_date}, today is {now.date()}")
+                    return False
+            
+            logger.info(f"Token is FRESH (age: {age_hours:.1f} hours, time: {file_time.strftime('%H:%M:%S')})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking token freshness: {e}")
+            return False
+    
+    def wait_for_authentication(self):
+        """
+        Wait for user to complete authentication
+        Retries every 3 minutes until pre-market time (8:45 AM)
+        """
         auth_manager = AuthManager(self.config, self.notifier)
-        access_token = auth_manager.authenticate()
         
-        if not access_token:
-            logger.error("Authentication failed!")
-            return False
+        # CRITICAL: Delete any old token first
+        token_file = self.config['data']['access_token_file']
+        if os.path.exists(token_file):
+            if not self.is_token_fresh(token_file):
+                logger.warning("Deleting old/stale token file")
+                os.remove(token_file)
+                
+        start_time = datetime.now()
         
-        # Initialize Kite client
-        self.kite = KiteClient(
-            self.config['api_key'],
-            self.config['api_secret'],
-            access_token
+        while self.auth_attempts < self.max_auth_attempts:
+            self.auth_attempts += 1
+            now = datetime.now()
+            
+            logger.info("=" * 80)
+            logger.info(f"AUTHENTICATION ATTEMPT {self.auth_attempts}/{self.max_auth_attempts}")
+            logger.info(f"Time: {now.strftime('%H:%M:%S')}")
+            logger.info("=" * 80)
+            
+            # Try to authenticate
+            access_token = auth_manager.authenticate()
+            
+            if access_token:
+                # Validate token immediately
+                kite_test = KiteClient(
+                    self.config['api_key'],
+                    self.config['api_secret'],
+                    access_token
+                )
+                
+                is_valid, result = kite_test.validate_token()
+                
+                if is_valid:
+                    logger.info(f"✅ AUTHENTICATION SUCCESS!")
+                    logger.info(f"✅ User: {result['user_name']}")
+                    logger.info(f"✅ Token: {access_token[:20]}...")
+                    logger.info(f"✅ Attempts: {self.auth_attempts}")
+                    logger.info(f"✅ Duration: {(datetime.now() - start_time).total_seconds() / 60:.1f} minutes")
+                    
+                    # Initialize Kite components
+                    self.kite = kite_test
+                    self.data_manager = DataManager(self.kite, self.config)
+                    self.pivot_calc = PivotCalculator(self.config)
+                    self.signal_gen = SignalGenerator(self.config, self.pivot_calc)
+                    self.position_mgr = PositionManager(self.config)
+                    
+                    self.authenticated = True
+                    return True
+                else:
+                    logger.error(f"Token validation failed: {result}")
+            
+            # Check if we should stop trying
+            now = datetime.now()
+            
+            # If past 8:45 AM, we need to hurry (only 30 min until trading)
+            if now.hour >= 8 and now.minute >= 45:
+                logger.warning("⚠️  URGENT: Past 8:45 AM, need authentication NOW!")
+                retry_interval = 60  # Try every minute
+            else:
+                retry_interval = 180  # Try every 3 minutes
+            
+            # If past 9:00 AM, give up (not enough time for pre-market)
+            if now.hour >= 9:
+                logger.error("❌ Past 9:00 AM - Too late for today's trading")
+                self.notifier.send_error_alert(
+                    "Authentication Timeout",
+                    "Failed to authenticate by 9:00 AM. System will not trade today."
+                )
+                return False
+            
+            logger.warning(f"Authentication attempt {self.auth_attempts} failed")
+            logger.info(f"⏳ Waiting {retry_interval} seconds before retry...")
+            logger.info(f"📱 Please check Telegram for authentication link")
+            
+            time.sleep(retry_interval)
+        
+        # Max attempts reached
+        logger.error(f"❌ Authentication failed after {self.max_auth_attempts} attempts")
+        self.notifier.send_error_alert(
+            "Authentication Failed",
+            f"Could not authenticate after {self.max_auth_attempts} attempts over {(datetime.now() - start_time).total_seconds() / 60:.1f} minutes"
         )
-        
-        # Validate token
-        is_valid, result = self.kite.validate_token()
-        if not is_valid:
-            logger.error(f"Token validation failed: {result}")
-            return False
-        
-        logger.info(f"✅ Authenticated as: {result['user_name']}")
-        
-        # Initialize data-dependent components
-        self.data_manager = DataManager(self.kite, self.config)
-        self.pivot_calc = PivotCalculator(self.config)
-        self.signal_gen = SignalGenerator(self.config, self.pivot_calc)
-        self.position_mgr = PositionManager(self.config)
-        
-        return True
+        return False
     
     def pre_market_setup(self):
         """Pre-market setup (8:45 - 9:15 AM)"""
         logger.info("=" * 80)
         logger.info("PRE-MARKET SETUP")
         logger.info("=" * 80)
+        
+        # Double-check authentication
+        if not self.authenticated or not self.kite:
+            logger.error("❌ Cannot run pre-market: Not authenticated!")
+            return False
+        
+        # Validate token one more time before pre-market
+        is_valid, result = self.kite.validate_token()
+        if not is_valid:
+            logger.error(f"❌ Token invalid at pre-market: {result}")
+            self.notifier.send_error_alert(
+                "Token Validation Failed",
+                f"Token became invalid before pre-market: {result}"
+            )
+            return False
+        
+        logger.info(f"✅ Token validated successfully (User: {result['user_name']})")
         
         try:
             instrument = self.config['trading']['instrument']
@@ -171,33 +300,27 @@ class PivotTradingSystem:
             days_to_expiry = self.data_manager.days_to_expiry()
             logger.info(f"Days to expiry: {days_to_expiry}")
             
-            # 5. For each strike, calculate pivots for CE and PE
+            # 5. For each strike, calculate pivots
             for strike in strikes:
                 self.pivot_data[strike] = {'CE': None, 'PE': None}
                 self.market_structure[strike] = {'CE': None, 'PE': None}
                 
                 for option_type in ['CE', 'PE']:
-                    # Generate option symbol
                     symbol = self.data_manager.get_option_symbol(strike, option_type)
-                    
-                    # Fetch previous day OHLC
                     ohlc = self.data_manager.fetch_previous_day_ohlc(symbol)
                     
                     if not ohlc:
                         logger.warning(f"No OHLC data for {symbol}")
                         continue
                     
-                    # Calculate pivots
                     pivots = self.pivot_calc.calculate_pivots(
                         ohlc['high'],
                         ohlc['low'],
                         ohlc['close']
                     )
                     
-                    # Determine market structure
                     structure = self.pivot_calc.determine_structure(pivots)
                     
-                    # Store
                     self.pivot_data[strike][option_type] = pivots
                     self.market_structure[strike][option_type] = structure
                     
@@ -213,6 +336,7 @@ class PivotTradingSystem:
             logger.info("PRE-MARKET SETUP COMPLETE")
             logger.info("=" * 80)
             
+            # Send SINGLE pre-market message
             self.notifier.send_message(f"""
 📊 <b>Pre-Market Setup Complete</b>
 
@@ -325,6 +449,12 @@ Monitoring for entry signals...
             if self.data_manager:
                 self.data_manager.cleanup_cache()
             
+            # IMPORTANT: Delete token file at EOD
+            token_file = self.config['data']['access_token_file']
+            if os.path.exists(token_file):
+                logger.info("Deleting token file (will re-authenticate tomorrow)")
+                os.remove(token_file)
+            
             logger.info("=" * 80)
             logger.info("EOD CLEANUP COMPLETE")
             logger.info("=" * 80)
@@ -336,140 +466,143 @@ Monitoring for entry signals...
         """Graceful shutdown handler"""
         logger.info("Shutdown signal received")
         self.running = False
-        
-        if self.notifier:
-            self.notifier.send_message("""
-🌙 <b>TRADING SYSTEM SHUTDOWN</b>
-
-📅 Time: {}
-📝 Reason: System shutdown requested
-
-✅ <b>Cleanup Complete:</b>
-- All positions closed
-- Data cached cleared
-- Logs rotated
-- Database updated
-
-📊 <b>Summary:</b>
-Daily summary has been generated and saved
-Check database for complete trade history
-
-🔄 <b>System Status:</b>
-System has stopped gracefully
-Will auto-start tomorrow at configured time
-
-😴 Good night! See you tomorrow!
-            """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')))
     
     def run(self):
-        """Main run method with proper scheduling"""
+        """
+        Main run method - FIXED V2
+        
+        CRITICAL CHANGES:
+        1. Always delete old tokens at startup
+        2. Wait for authentication with retries
+        3. Validate token before pre-market
+        4. Delete token at EOD (force fresh auth tomorrow)
+        """
         try:
             # Setup signal handlers
             signal.signal(signal.SIGINT, self.shutdown)
             signal.signal(signal.SIGTERM, self.shutdown)
             
-            # Send startup notification ONLY ONCE
-            startup_msg = """🚀 TRADING SYSTEM STARTED
-📅 Time: {}
-
-✅ System Initialized
-🟢 Monitoring started
-
-Next: Pre-market at 8:45 AM
-Trading: 9:15 AM - 3:15 PM
-""".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S IST'))
+            logger.info("=" * 80)
+            logger.info("TRADING SYSTEM STARTED")
+            logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}")
+            logger.info("=" * 80)
             
+            # STEP 1: AUTHENTICATE (with retries until 9:00 AM)
+            logger.info("\n🔐 STEP 1: AUTHENTICATION")
+            logger.info("Waiting for authentication...")
+            
+            if not self.wait_for_authentication():
+                logger.error("❌ Authentication failed. Cannot proceed.")
+                return
+            
+            # Send startup notification ONCE after successful auth
+            startup_msg = f"""🚀 <b>TRADING SYSTEM AUTHENTICATED</b>
+
+📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}
+
+✅ <b>Status:</b>
+- Authentication: ✅ Complete
+- Attempts: {self.auth_attempts}
+- System: 🟢 Running
+- Database: ✅ Connected
+
+⏰ <b>Schedule:</b>
+- Pre-market: 8:45 AM
+- Trading: 9:15 AM - 3:15 PM
+- EOD Summary: 3:15 PM
+
+🔔 <b>Next Steps:</b>
+{"- Waiting for 8:45 AM for pre-market setup" if datetime.now().hour < 8 or (datetime.now().hour == 8 and datetime.now().minute < 45) else "- Running pre-market setup NOW"}
+
+📊 System ready for trading!
+"""
             self.notifier.send_message(startup_msg)
-            logger.info("Trading system started")
             
             # Main scheduling loop
             pre_market_done = False
             trading_done = False
             
-            while True:
+            while self.running:
                 now = datetime.now()
-                current_time = now.time()
                 
                 # Check if trading day
                 if not self.trading_hours.is_trading_day():
-                    if now.hour == 8 and now.minute == 0:
-                        logger.info("Not a trading day (weekend/holiday)")
-                    time.sleep(3600)
+                    logger.info(f"Not a trading day. Sleeping until next trading day...")
+                    tomorrow_8am = datetime.combine(
+                        now.date() + timedelta(days=1),
+                        dt_time(8, 0)
+                    )
+                    sleep_seconds = (tomorrow_8am - now).total_seconds()
+                    logger.info(f"Sleeping {sleep_seconds/3600:.1f} hours")
+                    time.sleep(min(sleep_seconds, 3600))
                     continue
                 
-                # Reset flags for new day
-                if now.hour == 0 and now.minute < 5:
-                    pre_market_done = False
-                    trading_done = False
-                    logger.info("New day - resetting flags")
-                    time.sleep(300)
+                # STEP 2: PRE-MARKET SETUP (8:45 AM - 9:15 AM)
+                if not pre_market_done and now.hour >= 8 and now.minute >= 45 and now.hour < 10:
+                    logger.info("\n📊 STEP 2: PRE-MARKET SETUP")
+                    if self.pre_market_setup():
+                        pre_market_done = True
+                        logger.info("✅ Pre-market setup completed")
+                    else:
+                        logger.error("❌ Pre-market setup failed, retrying in 2 minutes...")
+                        time.sleep(120)
                     continue
                 
-                # Pre-market setup (8:45 AM - 9:00 AM)
-                if not pre_market_done and 8 <= now.hour < 9:
-                    if now.hour == 8 and now.minute >= 45:
-                        logger.info("Starting pre-market setup...")
-                        
-                        if not self.authenticate():
-                            logger.error("Authentication failed. Retrying in 5 minutes...")
-                            time.sleep(300)
-                            continue
-                        
+                # STEP 3: TRADING LOOP (9:15 AM - 3:15 PM)
+                if self.trading_hours.is_market_open() and not trading_done:
+                    if not pre_market_done:
+                        logger.warning("Market open but pre-market not done! Running now...")
                         if self.pre_market_setup():
                             pre_market_done = True
-                            logger.info("Pre-market setup completed")
-                        else:
-                            logger.error("Pre-market setup failed. Retrying in 5 minutes...")
-                            time.sleep(300)
-                            continue
-                    else:
-                        logger.info(f"Waiting for pre-market time (8:45 AM). Current: {now.strftime('%H:%M')}")
-                        time.sleep(600)
-                        continue
-                
-                # Trading hours (9:15 AM - 3:15 PM)
-                elif self.trading_hours.is_market_open():
-                    if not pre_market_done:
-                        logger.warning("Market open but pre-market not done. Running now...")
-                        if self.authenticate() and self.pre_market_setup():
-                            pre_market_done = True
                     
-                    if not trading_done:
-                        logger.info("Starting trading loop...")
-                        self.trading_loop()
-                        trading_done = True
-                        
-                        logger.info("Trading hours ended. Running EOD cleanup...")
-                        self.end_of_day_cleanup()
-                
-                # After market close (after 3:15 PM)
-                elif now.hour >= 15 and now.minute >= 15:
-                    if not trading_done and pre_market_done:
-                        logger.info("Market closed. Running EOD cleanup...")
-                        self.end_of_day_cleanup()
-                        trading_done = True
+                    logger.info("\n📈 STEP 3: TRADING LOOP")
+                    self.trading_loop()
+                    trading_done = True
                     
-                    # Calculate sleep time until next day 8:00 AM
+                    # STEP 4: EOD CLEANUP
+                    logger.info("\n🌅 STEP 4: EOD CLEANUP")
+                    self.end_of_day_cleanup()
+                    
+                    # Calculate sleep until tomorrow 8 AM
                     tomorrow_8am = datetime.combine(
                         now.date() + timedelta(days=1),
                         dt_time(8, 0)
                     )
                     sleep_seconds = (tomorrow_8am - now).total_seconds()
                     
-                    logger.info(f"📅 Market closed. Sleeping until {tomorrow_8am.strftime('%Y-%m-%d %H:%M')} ({sleep_seconds/3600:.1f} hours)")
-                    logger.info("🌙 System in idle mode. No messages until tomorrow.")
+                    logger.info("=" * 80)
+                    logger.info(f"📅 Trading day complete!")
+                    logger.info(f"🌙 Sleeping until {tomorrow_8am.strftime('%Y-%m-%d %H:%M')}")
+                    logger.info("=" * 80)
                     
-                    time.sleep(sleep_seconds)
+                    # Sleep until tomorrow
+                    while sleep_seconds > 0 and self.running:
+                        chunk = min(3600, sleep_seconds)
+                        time.sleep(chunk)
+                        sleep_seconds -= chunk
+                    
+                    # Reset for next day
+                    pre_market_done = False
+                    trading_done = False
+                    self.authenticated = False
+                    self.auth_attempts = 0
+                    
+                # Before pre-market
+                elif now.hour < 8 or (now.hour == 8 and now.minute < 45):
+                    mins_to_premarket = ((8 * 60 + 45) - (now.hour * 60 + now.minute))
+                    logger.info(f"Before pre-market ({mins_to_premarket} mins). Waiting...")
+                    time.sleep(min(300, mins_to_premarket * 60))
                 
+                # After market
                 else:
-                    logger.info(f"Before market hours. Current: {now.strftime('%H:%M')}. Waiting...")
-                    time.sleep(300)
+                    logger.info(f"After market hours. Waiting...")
+                    time.sleep(600)
                 
         except KeyboardInterrupt:
             logger.info("System stopped by user")
             self.shutdown()
         except Exception as e:
-            logger.error(f"Fatal error in run loop: {e}", exc_info=True)
+            logger.error(f"Fatal error: {e}", exc_info=True)
             self.notifier.send_message(f"❌ Fatal Error: {str(e)}")
             raise
 
